@@ -1,0 +1,1543 @@
+[1mdiff --git a/compilacion b/compilacion[m
+[1m--- a/compilacion[m
+[1m+++ b/compilacion[m
+[36m@@ -1 +1 @@[m
+[31m-Subproject commit ef659993a7afe78ea4a22b0627efe5999d3f1cf8[m
+[32m+[m[32mSubproject commit ef659993a7afe78ea4a22b0627efe5999d3f1cf8-dirty[m
+[1mdiff --git a/cpplint.py b/cpplint.py[m
+[1mindex 6430e05..afec869 100644[m
+[1m--- a/cpplint.py[m
+[1m+++ b/cpplint.py[m
+[36m@@ -1,4 +1,4 @@[m
+[31m-#!/usr/bin/python[m
+[32m+[m[32m#!/usr/bin/env python[m
+ #[m
+ # Copyright (c) 2009 Google Inc. All rights reserved.[m
+ #[m
+[36m@@ -28,40 +28,6 @@[m
+ # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE[m
+ # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.[m
+ [m
+[31m-# Here are some issues that I've had people identify in my code during reviews,[m
+[31m-# that I think are possible to flag automatically in a lint tool.  If these were[m
+[31m-# caught by lint, it would save time both for myself and that of my reviewers.[m
+[31m-# Most likely, some of these are beyond the scope of the current lint framework,[m
+[31m-# but I think it is valuable to retain these wish-list items even if they cannot[m
+[31m-# be immediately implemented.[m
+[31m-#[m
+[31m-#  Suggestions[m
+[31m-#  -----------[m
+[31m-#  - Check for no 'explicit' for multi-arg ctor[m
+[31m-#  - Check for boolean assign RHS in parens[m
+[31m-#  - Check for ctor initializer-list colon position and spacing[m
+[31m-#  - Check that if there's a ctor, there should be a dtor[m
+[31m-#  - Check accessors that return non-pointer member variables are[m
+[31m-#    declared const[m
+[31m-#  - Check accessors that return non-const pointer member vars are[m
+[31m-#    *not* declared const[m
+[31m-#  - Check for using public includes for testing[m
+[31m-#  - Check for spaces between brackets in one-line inline method[m
+[31m-#  - Check for no assert()[m
+[31m-#  - Check for spaces surrounding operators[m
+[31m-#  - Check for 0 in pointer context (should be NULL)[m
+[31m-#  - Check for 0 in char context (should be '\0')[m
+[31m-#  - Check for camel-case method name conventions for methods[m
+[31m-#    that are not simple inline getters and setters[m
+[31m-#  - Do not indent namespace contents[m
+[31m-#  - Avoid inlining non-trivial constructors in header files[m
+[31m-#  - Check for old-school (void) cast for call-sites of functions[m
+[31m-#    ignored return value[m
+[31m-#  - Check gUnit usage of anonymous namespace[m
+[31m-#  - Check for class declaration order (typedefs, consts, enums,[m
+[31m-#    ctor(s?), dtor, friend declarations, methods, member vars)[m
+[31m-#[m
+[31m-[m
+ """Does google-lint on c++ files.[m
+ [m
+ The goal of this script is to identify places in the code that *may*[m
+[36m@@ -78,22 +44,48 @@[m [msame line, but it is far from perfect (in either direction).[m
+ import codecs[m
+ import copy[m
+ import getopt[m
+[32m+[m[32mimport glob[m
+[32m+[m[32mimport itertools[m
+ import math  # for log[m
+ import os[m
+ import re[m
+ import sre_compile[m
+ import string[m
+ import sys[m
+[32m+[m[32mimport sysconfig[m
+ import unicodedata[m
+[32m+[m[32mimport xml.etree.ElementTree[m
+[32m+[m
+[32m+[m[32m# if empty, use defaults[m
+[32m+[m[32m_valid_extensions = set([])[m
+[32m+[m
+[32m+[m[32m__VERSION__ = '1.4.5'[m
+[32m+[m
+[32m+[m[32mtry:[m
+[32m+[m[32m  xrange          # Python 2[m
+[32m+[m[32mexcept NameError:[m
+[32m+[m[32m  #  -- pylint: disable=redefined-builtin[m
+[32m+[m[32m  xrange = range  # Python 3[m
+ [m
+ [m
+ _USAGE = """[m
+[31m-Syntax: cpplint.py [--verbose=#] [--output=vs7] [--filter=-x,+y,...][m
+[31m-                   [--counting=total|toplevel|detailed][m
+[32m+[m[32mSyntax: cpplint.py [--verbose=#] [--output=emacs|eclipse|vs7|junit][m
+[32m+[m[32m                   [--filter=-x,+y,...][m
+[32m+[m[32m                   [--counting=total|toplevel|detailed] [--root=subdir][m
+[32m+[m[32m                   [--repository=path][m
+[32m+[m[32m                   [--linelength=digits] [--headers=x,y,...][m
+[32m+[m[32m                   [--recursive][m
+[32m+[m[32m                   [--exclude=path][m
+[32m+[m[32m                   [--extensions=hpp,cpp,...][m
+[32m+[m[32m                   [--quiet][m
+[32m+[m[32m                   [--version][m
+         <file> [file] ...[m
+ [m
+[32m+[m[32m  Style checker for C/C++ source files.[m
+[32m+[m[32m  This is a fork of the Google style checker with minor extensions.[m
+[32m+[m
+   The style guidelines this tries to follow are those in[m
+[31m-    http://google-styleguide.googlecode.com/svn/trunk/cppguide.xml[m
+[32m+[m[32m    https://google.github.io/styleguide/cppguide.html[m
+ [m
+   Every problem is given a confidence score from 1-5, with 5 meaning we are[m
+   certain of the problem, and 1 meaning it could be a legitimate construct.[m
+[36m@@ -104,16 +96,25 @@[m [mSyntax: cpplint.py [--verbose=#] [--output=vs7] [--filter=-x,+y,...][m
+   suppresses errors of all categories on that line.[m
+ [m
+   The files passed in will be linted; at least one file must be provided.[m
+[31m-  Linted extensions are .cc, .cpp, and .h.  Other file types will be ignored.[m
+[32m+[m[32m  Default linted extensions are %s.[m
+[32m+[m[32m  Other file types will be ignored.[m
+[32m+[m[32m  Change the extensions with the --extensions flag.[m
+ [m
+   Flags:[m
+ [m
+[31m-    output=vs7[m
+[32m+[m[32m    output=emacs|eclipse|vs7|junit[m
+       By default, the output is formatted to ease emacs parsing.  Visual Studio[m
+[31m-      compatible output (vs7) may also be used.  Other formats are unsupported.[m
+[32m+[m[32m      compatible output (vs7) may also be used.  Further support exists for[m
+[32m+[m[32m      eclipse (eclipse), and JUnit (junit). XML parsers such as those used[m
+[32m+[m[32m      in Jenkins and Bamboo may also be used.  Other formats are unsupported.[m
+ [m
+     verbose=#[m
+       Specify a number 0-5 to restrict errors to certain verbosity levels.[m
+[32m+[m[32m      Errors with lower verbosity levels have lower confidence and are more[m
+[32m+[m[32m      likely to be false positives.[m
+[32m+[m
+[32m+[m[32m    quiet[m
+[32m+[m[32m      Don't print anything if no errors are found.[m
+ [m
+     filter=-x,+y,...[m
+       Specify a comma-separated list of category-filters to apply: only[m
+[36m@@ -137,145 +138,421 @@[m [mSyntax: cpplint.py [--verbose=#] [--output=vs7] [--filter=-x,+y,...][m
+       also be printed. If 'detailed' is provided, then a count[m
+       is provided for each category like 'build/class'.[m
+ [m
+[32m+[m[32m    repository=path[m
+[32m+[m[32m      The top level directory of the repository, used to derive the header[m
+[32m+[m[32m      guard CPP variable. By default, this is determined by searching for a[m
+[32m+[m[32m      path that contains .git, .hg, or .svn. When this flag is specified, the[m
+[32m+[m[32m      given path is used instead. This option allows the header guard CPP[m
+[32m+[m[32m      variable to remain consistent even if members of a team have different[m
+[32m+[m[32m      repository root directories (such as when checking out a subdirectory[m
+[32m+[m[32m      with SVN). In addition, users of non-mainstream version control systems[m
+[32m+[m[32m      can use this flag to ensure readable header guard CPP variables.[m
+[32m+[m
+[32m+[m[32m      Examples:[m
+[32m+[m[32m        Assuming that Alice checks out ProjectName and Bob checks out[m
+[32m+[m[32m        ProjectName/trunk and trunk contains src/chrome/ui/browser.h, then[m
+[32m+[m[32m        with no --repository flag, the header guard CPP variable will be:[m
+[32m+[m
+[32m+[m[32m        Alice => TRUNK_SRC_CHROME_BROWSER_UI_BROWSER_H_[m
+[32m+[m[32m        Bob   => SRC_CHROME_BROWSER_UI_BROWSER_H_[m
+[32m+[m
+[32m+[m[32m        If Alice uses the --repository=trunk flag and Bob omits the flag or[m
+[32m+[m[32m        uses --repository=. then the header guard CPP variable will be:[m
+[32m+[m
+[32m+[m[32m        Alice => SRC_CHROME_BROWSER_UI_BROWSER_H_[m
+[32m+[m[32m        Bob   => SRC_CHROME_BROWSER_UI_BROWSER_H_[m
+[32m+[m
+     root=subdir[m
+       The root directory used for deriving header guard CPP variable.[m
+[31m-      By default, the header guard CPP variable is calculated as the relative[m
+[31m-      path to the directory that contains .git, .hg, or .svn.  When this flag[m
+[31m-      is specified, the relative path is calculated from the specified[m
+[31m-      directory. If the specified directory does not exist, this flag is[m
+[31m-      ignored.[m
+[32m+[m[32m      This directory is relative to the top level directory of the repository[m
+[32m+[m[32m      which by default is determined by searching for a directory that contains[m
+[32m+[m[32m      .git, .hg, or .svn but can also be controlled with the --repository flag.[m
+[32m+[m[32m      If the specified directory does not exist, this flag is ignored.[m
+ [m
+       Examples:[m
+[31m-        Assuing that src/.git exists, the header guard CPP variables for[m
+[32m+[m[32m        Assuming that src is the top level directory of the repository (and[m
+[32m+[m[32m        cwd=top/src), the header guard CPP variables for[m
+         src/chrome/browser/ui/browser.h are:[m
+ [m
+         No flag => CHROME_BROWSER_UI_BROWSER_H_[m
+         --root=chrome => BROWSER_UI_BROWSER_H_[m
+         --root=chrome/browser => UI_BROWSER_H_[m
+[32m+[m[32m        --root=.. => SRC_CHROME_BROWSER_UI_BROWSER_H_[m
+[32m+[m
+[32m+[m[32m    linelength=digits[m
+[32m+[m[32m      This is the allowed line length for the project. The default value is[m
+[32m+[m[32m      80 characters.[m
+[32m+[m
+[32m+[m[32m      Examples:[m
+[32m+[m[32m        --linelength=120[m
+[32m+[m
+[32m+[m[32m    recursive[m
+[32m+[m[32m      Search for files to lint recursively. Each directory given in the list[m
+[32m+[m[32m      of files to be linted is replaced by all files that descend from that[m
+[32m+[m[32m      directory. Files with extensions not in the valid extensions list are[m
+[32m+[m[32m      excluded.[m
+[32m+[m
+[32m+[m[32m    exclude=path[m
+[32m+[m[32m      Exclude the given path from the list of files to be linted. Relative[m
+[32m+[m[32m      paths are evaluated relative to the current directory and shell globbing[m
+[32m+[m[32m      is performed. This flag can be provided multiple times to exclude[m
+[32m+[m[32m      multiple files.[m
+[32m+[m
+[32m+[m[32m      Examples:[m
+[32m+[m[32m        --exclude=one.cc[m
+[32m+[m[32m        --exclude=src/*.cc[m
+[32m+[m[32m        --exclude=src/*.cc --exclude=test/*.cc[m
+[32m+[m
+[32m+[m[32m    extensions=extension,extension,...[m
+[32m+[m[32m      The allowed file extensions that cpplint will check[m
+[32m+[m
+[32m+[m[32m      Examples:[m
+[32m+[m[32m        --extensions=%s[m
+[32m+[m
+[32m+[m[32m    headers=x,y,...[m
+[32m+[m[32m      The header extensions that cpplint will treat as .h in checks. Values are[m
+[32m+[m[32m      automatically added to --extensions list.[m
+[32m+[m[32m     (by default, only files with extensions %s will be assumed to be headers)[m
+[32m+[m
+[32m+[m[32m      Examples:[m
+[32m+[m[32m        --headers=%s[m
+[32m+[m[32m        --headers=hpp,hxx[m
+[32m+[m[32m        --headers=hpp[m
+[32m+[m
+[32m+[m[32m    cpplint.py supports per-directory configurations specified in CPPLINT.cfg[m
+[32m+[m[32m    files. CPPLINT.cfg file can contain a number of key=value pairs.[m
+[32m+[m[32m    Currently the following options are supported:[m
+[32m+[m
+[32m+[m[32m      set noparent[m
+[32m+[m[32m      filter=+filter1,-filter2,...[m
+[32m+[m[32m      exclude_files=regex[m
+[32m+[m[32m      linelength=80[m
+[32m+[m[32m      root=subdir[m
+[32m+[m[32m      headers=x,y,...[m
+[32m+[m
+[32m+[m[32m    "set noparent" option prevents cpplint from traversing directory tree[m
+[32m+[m[32m    upwards looking for more .cfg files in parent directories. This option[m
+[32m+[m[32m    is usually placed in the top-level project directory.[m
+[32m+[m
+[32m+[m[32m    The "filter" option is similar in function to --filter flag. It specifies[m
+[32m+[m[32m    message filters in addition to the |_DEFAULT_FILTERS| and those specified[m
+[32m+[m[32m    through --filter command-line flag.[m
+[32m+[m
+[32m+[m[32m    "exclude_files" allows to specify a regular expression to be matched against[m
+[32m+[m[32m    a file name. If the expression matches, the file is skipped and not run[m
+[32m+[m[32m    through the linter.[m
+[32m+[m
+[32m+[m[32m    "linelength" allows to specify the allowed line length for the project.[m
+[32m+[m
+[32m+[m[32m    The "root" option is similar in function to the --root flag (see example[m
+[32m+[m[32m    above). Paths are relative to the directory of the CPPLINT.cfg.[m
+[32m+[m
+[32m+[m[32m    The "headers" option is similar in function to the --headers flag[m
+[32m+[m[32m    (see example above).[m
+[32m+[m
+[32m+[m[32m    CPPLINT.cfg has an effect on files in the same directory and all[m
+[32m+[m[32m    sub-directories, unless overridden by a nested configuration file.[m
+[32m+[m
+[32m+[m[32m      Example file:[m
+[32m+[m[32m        filter=-build/include_order,+build/include_alpha[m
+[32m+[m[32m        exclude_files=.*\\.cc[m
+[32m+[m
+[32m+[m[32m    The above example disables build/include_order warning and enables[m
+[32m+[m[32m    build/include_alpha as well as excludes all .cc from being[m
+[32m+[m[32m    processed by linter, in the current directory (where the .cfg[m
+[32m+[m[32m    file is located) and all sub-directories.[m
+ """[m
+ [m
+ # We categorize each error message we print.  Here are the categories.[m
+ # We want an explicit list so we can list them all in cpplint --filter=.[m
+ # If you add a new error message with a new category, add it to the list[m
+ # here!  cpplint_unittest.py should tell you if you forget to do this.[m
+[31m-# \ used for clearer layout -- pylint: disable-msg=C6013[m
+ _ERROR_CATEGORIES = [[m
+[31m-  'build/class',[m
+[31m-  'build/deprecated',[m
+[31m-  'build/endif_comment',[m
+[31m-  'build/explicit_make_pair',[m
+[31m-  'build/forward_decl',[m
+[31m-  'build/header_guard',[m
+[31m-  'build/include',[m
+[31m-  'build/include_alpha',[m
+[31m-  'build/include_order',[m
+[31m-  'build/include_what_you_use',[m
+[31m-  'build/namespaces',[m
+[31m-  'build/printf_format',[m
+[31m-  'build/storage_class',[m
+[31m-  'legal/copyright',[m
+[31m-  'readability/alt_tokens',[m
+[31m-  'readability/braces',[m
+[31m-  'readability/casting',[m
+[31m-  'readability/check',[m
+[31m-  'readability/constructors',[m
+[31m-  'readability/fn_size',[m
+[31m-  'readability/function',[m
+[31m-  'readability/multiline_comment',[m
+[31m-  'readability/multiline_string',[m
+[31m-  'readability/namespace',[m
+[31m-  'readability/nolint',[m
+[31m-  'readability/streams',[m
+[31m-  'readability/todo',[m
+[31m-  'readability/utf8',[m
+[31m-  'runtime/arrays',[m
+[31m-  'runtime/casting',[m
+[31m-  'runtime/explicit',[m
+[31m-  'runtime/int',[m
+[31m-  'runtime/init',[m
+[31m-  'runtime/invalid_increment',[m
+[31m-  'runtime/member_string_references',[m
+[31m-  'runtime/memset',[m
+[31m-  'runtime/operator',[m
+[31m-  'runtime/printf',[m
+[31m-  'runtime/printf_format',[m
+[31m-  'runtime/references',[m
+[31m-  'runtime/rtti',[m
+[31m-  'runtime/sizeof',[m
+[31m-  'runtime/string',[m
+[31m-  'runtime/threadsafe_fn',[m
+[31m-  'whitespace/blank_line',[m
+[31m-  'whitespace/braces',[m
+[31m-  'whitespace/comma',[m
+[31m-  'whitespace/comments',[m
+[31m-  'whitespace/empty_loop_body',[m
+[31m-  'whitespace/end_of_line',[m
+[31m-  'whitespace/ending_newline',[m
+[31m-  'whitespace/forcolon',[m
+[31m-  'whitespace/indent',[m
+[31m-  'whitespace/labels',[m
+[31m-  'whitespace/line_length',[m
+[31m-  'whitespace/newline',[m
+[31m-  'whitespace/operators',[m
+[31m-  'whitespace/parens',[m
+[31m-  'whitespace/semicolon',[m
+[31m-  'whitespace/tab',[m
+[31m-  'whitespace/todo'[m
+[31m-  ][m
+[31m-[m
+[31m-# The default state of the category filter. This is overrided by the --filter=[m
+[32m+[m[32m    'build/class',[m
+[32m+[m[32m    'build/c++11',[m
+[32m+[m[32m    'build/c++14',[m
+[32m+[m[32m    'build/c++tr1',[m
+[32m+[m[32m    'build/deprecated',[m
+[32m+[m[32m    'build/endif_comment',[m
+[32m+[m[32m    'build/explicit_make_pair',[m
+[32m+[m[32m    'build/forward_decl',[m
+[32m+[m[32m    'build/header_guard',[m
+[32m+[m[32m    'build/include',[m
+[32m+[m[32m    'build/include_subdir',[m
+[32m+[m[32m    'build/include_alpha',[m
+[32m+[m[32m    'build/include_order',[m
+[32m+[m[32m    'build/include_what_you_use',[m
+[32m+[m[32m    'build/namespaces_literals',[m
+[32m+[m[32m    'build/namespaces',[m
+[32m+[m[32m    'build/printf_format',[m
+[32m+[m[32m    'build/storage_class',[m
+[32m+[m[32m    'legal/copyright',[m
+[32m+[m[32m    'readability/alt_tokens',[m
+[32m+[m[32m    'readability/braces',[m
+[32m+[m[32m    'readability/casting',[m
+[32m+[m[32m    'readability/check',[m
+[32m+[m[32m    'readability/constructors',[m
+[32m+[m[32m    'readability/fn_size',[m
+[32m+[m[32m    'readability/inheritance',[m
+[32m+[m[32m    'readability/multiline_comment',[m
+[32m+[m[32m    'readability/multiline_string',[m
+[32m+[m[32m    'readability/namespace',[m
+[32m+[m[32m    'readability/nolint',[m
+[32m+[m[32m    'readability/nul',[m
+[32m+[m[32m    'readability/strings',[m
+[32m+[m[32m    'readability/todo',[m
+[32m+[m[32m    'readability/utf8',[m
+[32m+[m[32m    'runtime/arrays',[m
+[32m+[m[32m    'runtime/casting',[m
+[32m+[m[32m    'runtime/explicit',[m
+[32m+[m[32m    'runtime/int',[m
+[32m+[m[32m    'runtime/init',[m
+[32m+[m[32m    'runtime/invalid_increment',[m
+[32m+[m[32m    'runtime/member_string_references',[m
+[32m+[m[32m    'runtime/memset',[m
+[32m+[m[32m    'runtime/indentation_namespace',[m
+[32m+[m[32m    'runtime/operator',[m
+[32m+[m[32m    'runtime/printf',[m
+[32m+[m[32m    'runtime/printf_format',[m
+[32m+[m[32m    'runtime/references',[m
+[32m+[m[32m    'runtime/string',[m
+[32m+[m[32m    'runtime/threadsafe_fn',[m
+[32m+[m[32m    'runtime/vlog',[m
+[32m+[m[32m    'whitespace/blank_line',[m
+[32m+[m[32m    'whitespace/braces',[m
+[32m+[m[32m    'whitespace/comma',[m
+[32m+[m[32m    'whitespace/comments',[m
+[32m+[m[32m    'whitespace/empty_conditional_body',[m
+[32m+[m[32m    'whitespace/empty_if_body',[m
+[32m+[m[32m    'whitespace/empty_loop_body',[m
+[32m+[m[32m    'whitespace/end_of_line',[m
+[32m+[m[32m    'whitespace/ending_newline',[m
+[32m+[m[32m    'whitespace/forcolon',[m
+[32m+[m[32m    'whitespace/indent',[m
+[32m+[m[32m    'whitespace/line_length',[m
+[32m+[m[32m    'whitespace/newline',[m
+[32m+[m[32m    'whitespace/operators',[m
+[32m+[m[32m    'whitespace/parens',[m
+[32m+[m[32m    'whitespace/semicolon',[m
+[32m+[m[32m    'whitespace/tab',[m
+[32m+[m[32m    'whitespace/todo',[m
+[32m+[m[32m    ][m
+[32m+[m
+[32m+[m[32m# These error categories are no longer enforced by cpplint, but for backwards-[m
+[32m+[m[32m# compatibility they may still appear in NOLINT comments.[m
+[32m+[m[32m_LEGACY_ERROR_CATEGORIES = [[m
+[32m+[m[32m    'readability/streams',[m
+[32m+[m[32m    'readability/function',[m
+[32m+[m[32m    ][m
+[32m+[m
+[32m+[m[32m# The default state of the category filter. This is overridden by the --filter=[m
+ # flag. By default all errors are on, so only add here categories that should be[m
+ # off by default (i.e., categories that must be enabled by the --filter= flags).[m
+ # All entries here should start with a '-' or '+', as in the --filter= flag.[m
+ _DEFAULT_FILTERS = ['-build/include_alpha'][m
+ [m
+[32m+[m[32m# The default list of categories suppressed for C (not C++) files.[m
+[32m+[m[32m_DEFAULT_C_SUPPRESSED_CATEGORIES = [[m
+[32m+[m[32m    'readability/casting',[m
+[32m+[m[32m    ][m
+[32m+[m
+[32m+[m[32m# The default list of categories suppressed for Linux Kernel files.[m
+[32m+[m[32m_DEFAULT_KERNEL_SUPPRESSED_CATEGORIES = [[m
+[32m+[m[32m    'whitespace/tab',[m
+[32m+[m[32m    ][m
+[32m+[m
+ # We used to check for high-bit characters, but after much discussion we[m
+ # decided those were OK, as long as they were in UTF-8 and didn't represent[m
+ # hard-coded international strings, which belong in a separate i18n file.[m
+ [m
+[31m-# Headers that we consider STL headers.[m
+[31m-_STL_HEADERS = frozenset([[m
+[31m-    'algobase.h', 'algorithm', 'alloc.h', 'bitset', 'deque', 'exception',[m
+[31m-    'function.h', 'functional', 'hash_map', 'hash_map.h', 'hash_set',[m
+[31m-    'hash_set.h', 'iterator', 'list', 'list.h', 'map', 'memory', 'new',[m
+[31m-    'pair.h', 'pthread_alloc', 'queue', 'set', 'set.h', 'sstream', 'stack',[m
+[31m-    'stl_alloc.h', 'stl_relops.h', 'type_traits.h',[m
+[31m-    'utility', 'vector', 'vector.h',[m
+[31m-    ])[m
+[31m-[m
+[31m-[m
+[31m-# Non-STL C++ system headers.[m
+[32m+[m[32m# C++ headers[m
+ _CPP_HEADERS = frozenset([[m
+[31m-    'algo.h', 'builtinbuf.h', 'bvector.h', 'cassert', 'cctype',[m
+[31m-    'cerrno', 'cfloat', 'ciso646', 'climits', 'clocale', 'cmath',[m
+[31m-    'complex', 'complex.h', 'csetjmp', 'csignal', 'cstdarg', 'cstddef',[m
+[31m-    'cstdio', 'cstdlib', 'cstring', 'ctime', 'cwchar', 'cwctype',[m
+[31m-    'defalloc.h', 'deque.h', 'editbuf.h', 'exception', 'fstream',[m
+[31m-    'fstream.h', 'hashtable.h', 'heap.h', 'indstream.h', 'iomanip',[m
+[31m-    'iomanip.h', 'ios', 'iosfwd', 'iostream', 'iostream.h', 'istream',[m
+[31m-    'istream.h', 'iterator.h', 'limits', 'map.h', 'multimap.h', 'multiset.h',[m
+[31m-    'numeric', 'ostream', 'ostream.h', 'parsestream.h', 'pfstream.h',[m
+[31m-    'PlotFile.h', 'procbuf.h', 'pthread_alloc.h', 'rope', 'rope.h',[m
+[31m-    'ropeimpl.h', 'SFile.h', 'slist', 'slist.h', 'stack.h', 'stdexcept',[m
+[31m-    'stdiostream.h', 'streambuf', 'streambuf.h', 'stream.h', 'strfile.h',[m
+[31m-    'string', 'strstream', 'strstream.h', 'tempbuf.h', 'tree.h', 'typeinfo',[m
+[32m+[m[32m    # Legacy[m
+[32m+[m[32m    'algobase.h',[m
+[32m+[m[32m    'algo.h',[m
+[32m+[m[32m    'alloc.h',[m
+[32m+[m[32m    'builtinbuf.h',[m
+[32m+[m[32m    'bvector.h',[m
+[32m+[m[32m    'complex.h',[m
+[32m+[m[32m    'defalloc.h',[m
+[32m+[m[32m    'deque.h',[m
+[32m+[m[32m    'editbuf.h',[m
+[32m+[m[32m    'fstream.h',[m
+[32m+[m[32m    'function.h',[m
+[32m+[m[32m    'hash_map',[m
+[32m+[m[32m    'hash_map.h',[m
+[32m+[m[32m    'hash_set',[m
+[32m+[m[32m    'hash_set.h',[m
+[32m+[m[32m    'hashtable.h',[m
+[32m+[m[32m    'heap.h',[m
+[32m+[m[32m    'indstream.h',[m
+[32m+[m[32m    'iomanip.h',[m
+[32m+[m[32m    'iostream.h',[m
+[32m+[m[32m    'istream.h',[m
+[32m+[m[32m    'iterator.h',[m
+[32m+[m[32m    'list.h',[m
+[32m+[m[32m    'map.h',[m
+[32m+[m[32m    'multimap.h',[m
+[32m+[m[32m    'multiset.h',[m
+[32m+[m[32m    'ostream.h',[m
+[32m+[m[32m    'pair.h',[m
+[32m+[m[32m    'parsestream.h',[m
+[32m+[m[32m    'pfstream.h',[m
+[32m+[m[32m    'procbuf.h',[m
+[32m+[m[32m    'pthread_alloc',[m
+[32m+[m[32m    'pthread_alloc.h',[m
+[32m+[m[32m    'rope',[m
+[32m+[m[32m    'rope.h',[m
+[32m+[m[32m    'ropeimpl.h',[m
+[32m+[m[32m    'set.h',[m
+[32m+[m[32m    'slist',[m
+[32m+[m[32m    'slist.h',[m
+[32m+[m[32m    'stack.h',[m
+[32m+[m[32m    'stdiostream.h',[m
+[32m+[m[32m    'stl_alloc.h',[m
+[32m+[m[32m    'stl_relops.h',[m
+[32m+[m[32m    'streambuf.h',[m
+[32m+[m[32m    'stream.h',[m
+[32m+[m[32m    'strfile.h',[m
+[32m+[m[32m    'strstream.h',[m
+[32m+[m[32m    'tempbuf.h',[m
+[32m+[m[32m    'tree.h',[m
+[32m+[m[32m    'type_traits.h',[m
+[32m+[m[32m    'vector.h',[m
+[32m+[m[32m    # 17.6.1.2 C++ library headers[m
+[32m+[m[32m    'algorithm',[m
+[32m+[m[32m    'array',[m
+[32m+[m[32m    'atomic',[m
+[32m+[m[32m    'bitset',[m
+[32m+[m[32m    'chrono',[m
+[32m+[m[32m    'codecvt',[m
+[32m+[m[32m    'complex',[m
+[32m+[m[32m    'condition_variable',[m
+[32m+[m[32m    'deque',[m
+[32m+[m[32m    'exception',[m
+[32m+[m[32m    'forward_list',[m
+[32m+[m[32m    'fstream',[m
+[32m+[m[32m    'functional',[m
+[32m+[m[32m    'future',[m
+[32m+[m[32m    'initializer_list',[m
+[32m+[m[32m    'iomanip',[m
+[32m+[m[32m    'ios',[m
+[32m+[m[32m    'iosfwd',[m
+[32m+[m[32m    'iostream',[m
+[32m+[m[32m    'istream',[m
+[32m+[m[32m    'iterator',[m
+[32m+[m[32m    'limits',[m
+[32m+[m[32m    'list',[m
+[32m+[m[32m    'locale',[m
+[32m+[m[32m    'map',[m
+[32m+[m[32m    'memory',[m
+[32m+[m[32m    'mutex',[m
+[32m+[m[32m    'new',[m
+[32m+[m[32m    'numeric',[m
+[32m+[m[32m    'ostream',[m
+[32m+[m[32m    'queue',[m
+[32m+[m[32m    'random',[m
+[32m+[m[32m    'ratio',[m
+[32m+[m[32m    'regex',[m
+[32m+[m[32m    'scoped_allocator',[m
+[32m+[m[32m    'set',[m
+[32m+[m[32m    'sstream',[m
+[32m+[m[32m    'stack',[m
+[32m+[m[32m    'stdexcept',[m
+[32m+[m[32m    'streambuf',[m
+[32m+[m[32m    'string',[m
+[32m+[m[32m    'strstream',[m
+[32m+[m[32m    'system_error',[m
+[32m+[m[32m    'thread',[m
+[32m+[m[32m    'tuple',[m
+[32m+[m[32m    'typeindex',[m
+[32m+[m[32m    'typeinfo',[m
+[32m+[m[32m    'type_traits',[m
+[32m+[m[32m    'unordered_map',[m
+[32m+[m[32m    'unordered_set',[m
+[32m+[m[32m    'utility',[m
+     'valarray',[m
+[32m+[m[32m    'vector',[m
+[32m+[m[32m    # 17.6.1.2 C++14 headers[m
+[32m+[m[32m    'shared_mutex',[m
+[32m+[m[32m    # 17.6.1.2 C++17 headers[m
+[32m+[m[32m    'any',[m
+[32m+[m[32m    'charconv',[m
+[32m+[m[32m    'codecvt',[m
+[32m+[m[32m    'execution',[m
+[32m+[m[32m    'filesystem',[m
+[32m+[m[32m    'memory_resource',[m
+[32m+[m[32m    'optional',[m
+[32m+[m[32m    'string_view',[m
+[32m+[m[32m    'variant',[m
+[32m+[m[32m    # 17.6.1.2 C++ headers for C library facilities[m
+[32m+[m[32m    'cassert',[m
+[32m+[m[32m    'ccomplex',[m
+[32m+[m[32m    'cctype',[m
+[32m+[m[32m    'cerrno',[m
+[32m+[m[32m    'cfenv',[m
+[32m+[m[32m    'cfloat',[m
+[32m+[m[32m    'cinttypes',[m
+[32m+[m[32m    'ciso646',[m
+[32m+[m[32m    'climits',[m
+[32m+[m[32m    'clocale',[m
+[32m+[m[32m    'cmath',[m
+[32m+[m[32m    'csetjmp',[m
+[32m+[m[32m    'csignal',[m
+[32m+[m[32m    'cstdalign',[m
+[32m+[m[32m    'cstdarg',[m
+[32m+[m[32m    'cstdbool',[m
+[32m+[m[32m    'cstddef',[m
+[32m+[m[32m    'cstdint',[m
+[32m+[m[32m    'cstdio',[m
+[32m+[m[32m    'cstdlib',[m
+[32m+[m[32m    'cstring',[m
+[32m+[m[32m    'ctgmath',[m
+[32m+[m[32m    'ctime',[m
+[32m+[m[32m    'cuchar',[m
+[32m+[m[32m    'cwchar',[m
+[32m+[m[32m    'cwctype',[m
+     ])[m
+ [m
+[32m+[m[32m# Type names[m
+[32m+[m[32m_TYPES = re.compile([m
+[32m+[m[32m    r'^(?:'[m
+[32m+[m[32m    # [dcl.type.simple][m
+[32m+[m[32m    r'(char(16_t|32_t)?)|wchar_t|'[m
+[32m+[m[32m    r'bool|short|int|long|signed|unsigned|float|double|'[m
+[32m+[m[32m    # [support.types][m
+[32m+[m[32m    r'(ptrdiff_t|size_t|max_align_t|nullptr_t)|'[m
+[32m+[m[32m    # [cstdint.syn][m
+[32m+[m[32m    r'(u?int(_fast|_least)?(8|16|32|64)_t)|'[m
+[32m+[m[32m    r'(u?int(max|ptr)_t)|'[m
+[32m+[m[32m    r')$')[m
+[32m+[m
+[32m+[m
+[32m+[m[32m# These headers are excluded from [build/include] and [build/include_order][m
+[32m+[m[32m# checks:[m
+[32m+[m[32m# - Anything not following google file name conventions (containing an[m
+[32m+[m[32m#   uppercase character, such as Python.h or nsStringAPI.h, for example).[m
+[32m+[m[32m# - Lua headers.[m
+[32m+[m[32m_THIRD_PARTY_HEADERS_PATTERN = re.compile([m
+[32m+[m[32m    r'^(?:[^/]*[A-Z][^/]*\.h|lua\.h|lauxlib\.h|lualib\.h)$')[m
+[32m+[m
+[32m+[m[32m# Pattern for matching FileInfo.BaseName() against test file name[m
+[32m+[m[32m_test_suffixes = ['_test', '_regtest', '_unittest'][m
+[32m+[m[32m_TEST_FILE_SUFFIX = '(' + '|'.join(_test_suffixes) + r')$'[m
+[32m+[m
+[32m+[m[32m# Pattern that matches only complete whitespace, possibly across multiple lines.[m
+[32m+[m[32m_EMPTY_CONDITIONAL_BODY_PATTERN = re.compile(r'^\s*$', re.DOTALL)[m
+ [m
+ # Assertion macros.  These are defined in base/logging.h and[m
+[31m-# testing/base/gunit.h.  Note that the _M versions need to come first[m
+[31m-# for substring matching to work.[m
+[32m+[m[32m# testing/base/public/gunit.h.[m
+ _CHECK_MACROS = [[m
+     'DCHECK', 'CHECK',[m
+[31m-    'EXPECT_TRUE_M', 'EXPECT_TRUE',[m
+[31m-    'ASSERT_TRUE_M', 'ASSERT_TRUE',[m
+[31m-    'EXPECT_FALSE_M', 'EXPECT_FALSE',[m
+[31m-    'ASSERT_FALSE_M', 'ASSERT_FALSE',[m
+[32m+[m[32m    'EXPECT_TRUE', 'ASSERT_TRUE',[m
+[32m+[m[32m    'EXPECT_FALSE', 'ASSERT_FALSE',[m
+     ][m
+ [m
+ # Replacement macros for CHECK/DCHECK/EXPECT_TRUE/EXPECT_FALSE[m
+[31m-_CHECK_REPLACEMENT = dict([(m, {}) for m in _CHECK_MACROS])[m
+[32m+[m[32m_CHECK_REPLACEMENT = dict([(macro_var, {}) for macro_var in _CHECK_MACROS])[m
+ [m
+ for op, replacement in [('==', 'EQ'), ('!=', 'NE'),[m
+                         ('>=', 'GE'), ('>', 'GT'),[m
+[36m@@ -284,16 +561,12 @@[m [mfor op, replacement in [('==', 'EQ'), ('!=', 'NE'),[m
+   _CHECK_REPLACEMENT['CHECK'][op] = 'CHECK_%s' % replacement[m
+   _CHECK_REPLACEMENT['EXPECT_TRUE'][op] = 'EXPECT_%s' % replacement[m
+   _CHECK_REPLACEMENT['ASSERT_TRUE'][op] = 'ASSERT_%s' % replacement[m
+[31m-  _CHECK_REPLACEMENT['EXPECT_TRUE_M'][op] = 'EXPECT_%s_M' % replacement[m
+[31m-  _CHECK_REPLACEMENT['ASSERT_TRUE_M'][op] = 'ASSERT_%s_M' % replacement[m
+ [m
+ for op, inv_replacement in [('==', 'NE'), ('!=', 'EQ'),[m
+                             ('>=', 'LT'), ('>', 'LE'),[m
+                             ('<=', 'GT'), ('<', 'GE')]:[m
+   _CHECK_REPLACEMENT['EXPECT_FALSE'][op] = 'EXPECT_%s' % inv_replacement[m
+   _CHECK_REPLACEMENT['ASSERT_FALSE'][op] = 'ASSERT_%s' % inv_replacement[m
+[31m-  _CHECK_REPLACEMENT['EXPECT_FALSE_M'][op] = 'EXPECT_%s_M' % inv_replacement[m
+[31m-  _CHECK_REPLACEMENT['ASSERT_FALSE_M'][op] = 'ASSERT_%s_M' % inv_replacement[m
+ [m
+ # Alternative tokens and their replacements.  For full list, see section 2.5[m
+ # Alternative tokens [lex.digraph] in the C++ standard.[m
+[36m@@ -317,9 +590,8 @@[m [m_ALT_TOKEN_REPLACEMENT = {[m
+ # Compile regular expression that matches all the above keywords.  The "[ =()]"[m
+ # bit is meant to avoid matching these keywords outside of boolean expressions.[m
+ #[m
+[31m-# False positives include C-style multi-line comments (http://go/nsiut )[m
+[31m-# and multi-line strings (http://go/beujw ), but those have always been[m
+[31m-# troublesome for cpplint.[m
+[32m+[m[32m# False positives include C-style multi-line comments and multi-line strings[m
+[32m+[m[32m# but those have always been troublesome for cpplint.[m
+ _ALT_TOKEN_REPLACEMENT_PATTERN = re.compile([m
+     r'[ =()](' + ('|'.join(_ALT_TOKEN_REPLACEMENT.keys())) + r')(?=[ (]|$)')[m
+ [m
+[36m@@ -343,11 +615,14 @@[m [m_MATCH_ASM = re.compile(r'^\s*(?:asm|_asm|__asm|__asm__)'[m
+                         r'(?:\s+(volatile|__volatile__))?'[m
+                         r'\s*[{(]')[m
+ [m
+[32m+[m[32m# Match strings that indicate we're working on a C (not C++) file.[m
+[32m+[m[32m_SEARCH_C_FILE = re.compile(r'\b(?:LINT_C_FILE|'[m
+[32m+[m[32m                            r'vim?:\s*.*(\s*|:)filetype=c(\s*|:|$))')[m
+ [m
+[31m-_regexp_compile_cache = {}[m
+[32m+[m[32m# Match string that indicates we're working on a Linux Kernel file.[m
+[32m+[m[32m_SEARCH_KERNEL_FILE = re.compile(r'\b(?:LINT_KERNEL_FILE)')[m
+ [m
+[31m-# Finds occurrences of NOLINT or NOLINT(...).[m
+[31m-_RE_SUPPRESSION = re.compile(r'\bNOLINT\b(\([^)]*\))?')[m
+[32m+[m[32m_regexp_compile_cache = {}[m
+ [m
+ # {str, set(int)}: a map from error categories to sets of linenumbers[m
+ # on which those errors are expected and should be suppressed.[m
+[36m@@ -356,9 +631,97 @@[m [m_error_suppressions = {}[m
+ # The root directory used for deriving header guard CPP variable.[m
+ # This is set by --root flag.[m
+ _root = None[m
+[32m+[m[32m_root_debug = False[m
+[32m+[m
+[32m+[m[32m# The top level repository directory. If set, _root is calculated relative to[m
+[32m+[m[32m# this directory instead of the directory containing version control artifacts.[m
+[32m+[m[32m# This is set by the --repository flag.[m
+[32m+[m[32m_repository = None[m
+[32m+[m
+[32m+[m[32m# Files to exclude from linting. This is set by the --exclude flag.[m
+[32m+[m[32m_excludes = None[m
+[32m+[m
+[32m+[m[32m# Whether to supress PrintInfo messages[m
+[32m+[m[32m_quiet = False[m
+[32m+[m
+[32m+[m[32m# The allowed line length of files.[m
+[32m+[m[32m# This is set by --linelength flag.[m
+[32m+[m[32m_line_length = 100[m
+[32m+[m
+[32m+[m[32mtry:[m
+[32m+[m[32m  unicode[m
+[32m+[m[32mexcept NameError:[m
+[32m+[m[32m  #  -- pylint: disable=redefined-builtin[m
+[32m+[m[32m  basestring = unicode = str[m
+[32m+[m
+[32m+[m[32mtry:[m
+[32m+[m[32m  long[m
+[32m+[m[32mexcept NameError:[m
+[32m+[m[32m  #  -- pylint: disable=redefined-builtin[m
+[32m+[m[32m  long = int[m
+[32m+[m
+[32m+[m[32mif sys.version_info < (3,):[m
+[32m+[m[32m  #  -- pylint: disable=no-member[m
+[32m+[m[32m  # BINARY_TYPE = str[m
+[32m+[m[32m  itervalues = dict.itervalues[m
+[32m+[m[32m  iteritems = dict.iteritems[m
+[32m+[m[32melse:[m
+[32m+[m[32m  # BINARY_TYPE = bytes[m
+[32m+[m[32m  itervalues = dict.values[m
+[32m+[m[32m  iteritems = dict.items[m
+[32m+[m
+[32m+[m[32mdef unicode_escape_decode(x):[m
+[32m+[m[32m  if sys.version_info < (3,):[m
+[32m+[m[32m    return codecs.unicode_escape_decode(x)[0][m
+[32m+[m[32m  else:[m
+[32m+[m[32m    return x[m
+[32m+[m
+[32m+[m[32m# Treat all headers starting with 'h' equally: .h, .hpp, .hxx etc.[m
+[32m+[m[32m# This is set by --headers flag.[m
+[32m+[m[32m_hpp_headers = set([])[m
+[32m+[m
+[32m+[m[32m# {str, bool}: a map from error categories to booleans which indicate if the[m
+[32m+[m[32m# category should be suppressed for every line.[m
+[32m+[m[32m_global_error_suppressions = {}[m
+[32m+[m
+[32m+[m[32mdef ProcessHppHeadersOption(val):[m
+[32m+[m[32m  global _hpp_headers[m
+[32m+[m[32m  try:[m
+[32m+[m[32m    _hpp_headers = {ext.strip() for ext in val.split(',')}[m
+[32m+[m[32m  except ValueError:[m
+[32m+[m[32m    PrintUsage('Header extensions must be comma separated list.')[m
+[32m+[m
+[32m+[m[32mdef IsHeaderExtension(file_extension):[m
+[32m+[m[32m  return file_extension in GetHeaderExtensions()[m
+[32m+[m
+[32m+[m[32mdef GetHeaderExtensions():[m
+[32m+[m[32m  if _hpp_headers:[m
+[32m+[m[32m    return _hpp_headers[m
+[32m+[m[32m  if _valid_extensions:[m
+[32m+[m[32m    return {h for h in _valid_extensions if 'h' in h}[m
+[32m+[m[32m  return set(['h', 'hh', 'hpp', 'hxx', 'h++', 'cuh'])[m
+[32m+[m
+[32m+[m[32m# The allowed extensions for file names[m
+[32m+[m[32m# This is set by --extensions flag[m
+[32m+[m[32mdef GetAllExtensions():[m
+[32m+[m[32m  return GetHeaderExtensions().union(_valid_extensions or set([m
+[32m+[m[32m    ['c', 'cc', 'cpp', 'cxx', 'c++', 'cu']))[m
+[32m+[m
+[32m+[m[32mdef ProcessExtensionsOption(val):[m
+[32m+[m[32m  global _valid_extensions[m
+[32m+[m[32m  try:[m
+[32m+[m[32m    extensions = [ext.strip() for ext in val.split(',')][m
+[32m+[m[32m    _valid_extensions = set(extensions)[m
+[32m+[m[32m  except ValueError:[m
+[32m+[m[32m    PrintUsage('Extensions should be a comma-separated list of values;'[m
+[32m+[m[32m               'for example: extensions=hpp,cpp\n'[m
+[32m+[m[32m               'This could not be parsed: "%s"' % (val,))[m
+[32m+[m
+[32m+[m[32mdef GetNonHeaderExtensions():[m
+[32m+[m[32m  return GetAllExtensions().difference(GetHeaderExtensions())[m
+ [m
+ def ParseNolintSuppressions(filename, raw_line, linenum, error):[m
+[31m-  """Updates the global list of error-suppressions.[m
+[32m+[m[32m  """Updates the global list of line error-suppressions.[m
+ [m
+   Parses any NOLINT comments on the current line, updating the global[m
+   error_suppressions store.  Reports an error if the NOLINT comment[m
+[36m@@ -370,64 +733,113 @@[m [mdef ParseNolintSuppressions(filename, raw_line, linenum, error):[m
+     linenum: int, the number of the current line.[m
+     error: function, an error handler.[m
+   """[m
+[31m-  # FIXME(adonovan): "NOLINT(" is misparsed as NOLINT(*).[m
+[31m-  matched = _RE_SUPPRESSION.search(raw_line)[m
+[32m+[m[32m  matched = Search(r'\bNOLINT(NEXTLINE)?\b(\([^)]+\))?', raw_line)[m
+   if matched:[m
+[31m-    category = matched.group(1)[m
+[32m+[m[32m    if matched.group(1):[m
+[32m+[m[32m      suppressed_line = linenum + 1[m
+[32m+[m[32m    else:[m
+[32m+[m[32m      suppressed_line = linenum[m
+[32m+[m[32m    category = matched.group(2)[m
+     if category in (None, '(*)'):  # => "suppress all"[m
+[31m-      _error_suppressions.setdefault(None, set()).add(linenum)[m
+[32m+[m[32m      _error_suppressions.setdefault(None, set()).add(suppressed_line)[m
+     else:[m
+       if category.startswith('(') and category.endswith(')'):[m
+         category = category[1:-1][m
+         if category in _ERROR_CATEGORIES:[m
+[31m-          _error_suppressions.setdefault(category, set()).add(linenum)[m
+[31m-        else:[m
+[32m+[m[32m          _error_suppressions.setdefault(category, set()).add(suppressed_line)[m
+[32m+[m[32m        elif category not in _LEGACY_ERROR_CATEGORIES:[m
+           error(filename, linenum, 'readability/nolint', 5,[m
+                 'Unknown NOLINT error category: %s' % category)[m
+ [m
+ [m
+[32m+[m[32mdef ProcessGlobalSuppresions(lines):[m
+[32m+[m[32m  """Updates the list of global error suppressions.[m
+[32m+[m
+[32m+[m[32m  Parses any lint directives in the file that have global effect.[m
+[32m+[m
+[32m+[m[32m  Args:[m
+[32m+[m[32m    lines: An array of strings, each representing a line of the file, with the[m
+[32m+[m[32m           last element being empty if the file is terminated with a newline.[m
+[32m+[m[32m  """[m
+[32m+[m[32m  for line in lines:[m
+[32m+[m[32m    if _SEARCH_C_FILE.search(line):[m
+[32m+[m[32m      for category in _DEFAULT_C_SUPPRESSED_CATEGORIES:[m
+[32m+[m[32m        _global_error_suppressions[category] = True[m
+[32m+[m[32m    if _SEARCH_KERNEL_FILE.search(line):[m
+[32m+[m[32m      for category in _DEFAULT_KERNEL_SUPPRESSED_CATEGORIES:[m
+[32m+[m[32m        _global_error_suppressions[category] = True[m
+[32m+[m
+[32m+[m
+ def ResetNolintSuppressions():[m
+[31m-  "Resets the set of NOLINT suppressions to empty."[m
+[32m+[m[32m  """Resets the set of NOLINT suppressions to empty."""[m
+   _error_suppressions.clear()[m
+[32m+[m[32m  _global_error_suppressions.clear()[m
+ [m
+ [m
+ def IsErrorSuppressedByNolint(category, linenum):[m
+   """Returns true if the specified error category is suppressed on this line.[m
+ [m
+   Consults the global error_suppressions map populated by[m
+[31m-  ParseNolintSuppressions/ResetNolintSuppressions.[m
+[32m+[m[32m  ParseNolintSuppressions/ProcessGlobalSuppresions/ResetNolintSuppressions.[m
+ [m
+   Args:[m
+     category: str, the category of the error.[m
+     linenum: int, the current line number.[m
+   Returns:[m
+[31m-    bool, True iff the error should be suppressed due to a NOLINT comment.[m
+[32m+[m[32m    bool, True iff the error should be suppressed due to a NOLINT comment or[m
+[32m+[m[32m    global suppression.[m
+   """[m
+[31m-  return (linenum in _error_suppressions.get(category, set()) or[m
+[32m+[m[32m  return (_global_error_suppressions.get(category, False) or[m
+[32m+[m[32m          linenum in _error_suppressions.get(category, set()) or[m
+           linenum in _error_suppressions.get(None, set()))[m
+ [m
+[32m+[m
+ def Match(pattern, s):[m
+   """Matches the string with the pattern, caching the compiled regexp."""[m
+   # The regexp compilation caching is inlined in both Match and Search for[m
+   # performance reasons; factoring it out into a separate function turns out[m
+   # to be noticeably expensive.[m
+[31m-  if not pattern in _regexp_compile_cache:[m
+[32m+[m[32m  if pattern not in _regexp_compile_cache:[m
+     _regexp_compile_cache[pattern] = sre_compile.compile(pattern)[m
+   return _regexp_compile_cache[pattern].match(s)[m
+ [m
+ [m
+[32m+[m[32mdef ReplaceAll(pattern, rep, s):[m
+[32m+[m[32m  """Replaces instances of pattern in a string with a replacement.[m
+[32m+[m
+[32m+[m[32m  The compiled regex is kept in a cache shared by Match and Search.[m
+[32m+[m
+[32m+[m[32m  Args:[m
+[32m+[m[32m    pattern: regex pattern[m
+[32m+[m[32m    rep: replacement text[m
+[32m+[m[32m    s: search string[m
+[32m+[m
+[32m+[m[32m  Returns:[m
+[32m+[m[32m    string with replacements made (or original string if no replacements)[m
+[32m+[m[32m  """[m
+[32m+[m[32m  if pattern not in _regexp_compile_cache:[m
+[32m+[m[32m    _regexp_compile_cache[pattern] = sre_compile.compile(pattern)[m
+[32m+[m[32m  return _regexp_compile_cache[pattern].sub(rep, s)[m
+[32m+[m
+[32m+[m
+ def Search(pattern, s):[m
+   """Searches the string for the pattern, caching the compiled regexp."""[m
+[31m-  if not pattern in _regexp_compile_cache:[m
+[32m+[m[32m  if pattern not in _regexp_compile_cache:[m
+     _regexp_compile_cache[pattern] = sre_compile.compile(pattern)[m
+   return _regexp_compile_cache[pattern].search(s)[m
+ [m
+ [m
+[31m-class _IncludeState(dict):[m
+[32m+[m[32mdef _IsSourceExtension(s):[m
+[32m+[m[32m  """File extension (excluding dot) matches a source file extension."""[m
+[32m+[m[32m  return s in GetNonHeaderExtensions()[m
+[32m+[m
+[32m+[m
+[32m+[m[32mclass _IncludeState(object):[m
+   """Tracks line numbers for includes, and the order in which includes appear.[m
+ [m
+[31m-  As a dict, an _IncludeState object serves as a mapping between include[m
+[31m-  filename and line number on which that file was included.[m
+[32m+[m[32m  include_list contains list of lists of (header, line number) pairs.[m
+[32m+[m[32m  It's a lists of lists rather than just one flat list to make it[m
+[32m+[m[32m  easier to update across preprocessor boundaries.[m
+ [m
+   Call CheckNextIncludeOrder() once for each header in the file, passing[m
+   in the type constants defined above. Calls in an illegal order will[m
+[36m@@ -458,12 +870,47 @@[m [mclass _IncludeState(dict):[m
+       }[m
+ [m
+   def __init__(self):[m
+[31m-    dict.__init__(self)[m
+[32m+[m[32m    self.include_list = [[]][m
+[32m+[m[32m    self._section = None[m
+[32m+[m[32m    self._last_header = None[m
+[32m+[m[32m    self.ResetSection('')[m
+[32m+[m
+[32m+[m[32m  def FindHeader(self, header):[m
+[32m+[m[32m    """Check if a header has already been included.[m
+[32m+[m
+[32m+[m[32m    Args:[m
+[32m+[m[32m      header: header to check.[m
+[32m+[m[32m    Returns:[m
+[32m+[m[32m      Line number of previous occurrence, or -1 if the header has not[m
+[32m+[m[32m      been seen before.[m
+[32m+[m[32m    """[m
+[32m+[m[32m    for section_list in self.include_list:[m
+[32m+[m[32m      for f in section_list:[m
+[32m+[m[32m        if f[0] == header:[m
+[32m+[m[32m          return f[1][m
+[32m+[m[32m    return -1[m
+[32m+[m
+[32m+[m[32m  def ResetSection(self, directive):[m
+[32m+[m[32m    """Reset section checking for preprocessor directive.[m
+[32m+[m
+[32m+[m[32m    Args:[m
+[32m+[m[32m      directive: preprocessor directive (e.g. "if", "else").[m
+[32m+[m[32m    """[m
+     # The name of the current section.[m
+     self._section = self._INITIAL_SECTION[m
+     # The path of last found header.[m
+     self._last_header = ''[m
+ [m
+[32m+[m[32m    # Update list of includes.  Note that we never pop from the[m
+[32m+[m[32m    # include list.[m
+[32m+[m[32m    if directive in ('if', 'ifdef', 'ifndef'):[m
+[32m+[m[32m      self.include_list.append([])[m
+[32m+[m[32m    elif directive in ('else', 'elif'):[m
+[32m+[m[32m      self.include_list[-1] = [][m
+[32m+[m
+[32m+[m[32m  def SetLastHeader(self, header_path):[m
+[32m+[m[32m    self._last_header = header_path[m
+[32m+[m
+   def CanonicalizeAlphabeticalOrder(self, header_path):[m
+     """Returns a path canonicalized for alphabetical comparison.[m
+ [m
+[36m@@ -479,19 +926,25 @@[m [mclass _IncludeState(dict):[m
+     """[m
+     return header_path.replace('-inl.h', '.h').replace('-', '_').lower()[m
+ [m
+[31m-  def IsInAlphabeticalOrder(self, header_path):[m
+[32m+[m[32m  def IsInAlphabeticalOrder(self, clean_lines, linenum, header_path):[m
+     """Check if a header is in alphabetical order with the previous header.[m
+ [m
+     Args:[m
+[31m-      header_path: Header to be checked.[m
+[32m+[m[32m      clean_lines: A CleansedLines instance containing the file.[m
+[32m+[m[32m      linenum: The number of the line to check.[m
+[32m+[m[32m      header_path: Canonicalized header to be checked.[m
+ [m
+     Returns:[m
+       Returns true if the header is in alphabetical order.[m
+     """[m
+[31m-    canonical_header = self.CanonicalizeAlphabeticalOrder(header_path)[m
+[31m-    if self._last_header > canonical_header:[m
+[32m+[m[32m    # If previous section is different from current section, _last_header will[m
+[32m+[m[32m    # be reset to empty string, so it's always less than current header.[m
+[32m+[m[32m    #[m
+[32m+[m[32m    # If previous line was a blank line, assume that the headers are[m
+[32m+[m[32m    # intentionally sorted the way they are.[m
+[32m+[m[32m    if (self._last_header > header_path and[m
+[32m+[m[32m        Match(r'^\s*#\s*include\b', clean_lines.elided[linenum - 1])):[m
+       return False[m
+[31m-    self._last_header = canonical_header[m
+     return True[m
+ [m
+   def CheckNextIncludeOrder(self, header_type):[m
+[36m@@ -556,18 +1009,34 @@[m [mclass _CppLintState(object):[m
+     self.error_count = 0    # global count of reported errors[m
+     # filters to apply when emitting error messages[m
+     self.filters = _DEFAULT_FILTERS[:][m
+[32m+[m[32m    # backup of filter list. Used to restore the state after each file.[m
+[32m+[m[32m    self._filters_backup = self.filters[:][m
+     self.counting = 'total'  # In what way are we counting errors?[m
+     self.errors_by_category = {}  # string to int dict storing error counts[m
+[32m+[m[32m    self.quiet = False  # Suppress non-error messagess?[m
+ [m
+     # output format:[m
+     # "emacs" - format that emacs can parse (default)[m
+[32m+[m[32m    # "eclipse" - format that eclipse can parse[m
+     # "vs7" - format that Microsoft Visual Studio 7 can parse[m
+[32m+[m[32m    # "junit" - format that Jenkins, Bamboo, etc can parse[m
+     self.output_format = 'emacs'[m
+ [m
+[32m+[m[32m    # For JUnit output, save errors and failures until the end so that they[m
+[32m+[m[32m    # can be written into the XML[m
+[32m+[m[32m    self._junit_errors = [][m
+[32m+[m[32m    self._junit_failures = [][m
+[32m+[m
+   def SetOutputFormat(self, output_format):[m
+     """Sets the output format for errors."""[m
+     self.output_format = output_format[m
+ [m
+[32m+[m[32m  def SetQuiet(self, quiet):[m
+[32m+[m[32m    """Sets the module's quiet settings, and returns the previous setting."""[m
+[32m+[m[32m    last_quiet = self.quiet[m
+[32m+[m[32m    self.quiet = quiet[m
+[32m+[m[32m    return last_quiet[m
+[32m+[m
+   def SetVerboseLevel(self, level):[m
+     """Sets the module's verbosity, and returns the previous setting."""[m
+     last_verbose_level = self.verbose_level[m
+[36m@@ -594,6 +1063,10 @@[m [mclass _CppLintState(object):[m
+     """[m
+     # Default filters always have less priority than the flag ones.[m
+     self.filters = _DEFAULT_FILTERS[:][m
+[32m+[m[32m    self.AddFilters(filters)[m
+[32m+[m
+[32m+[m[32m  def AddFilters(self, filters):[m
+[32m+[m[32m    """ Adds more filters to the existing list of error-message filters. """[m
+     for filt in filters.split(','):[m
+       clean_filt = filt.strip()[m
+       if clean_filt:[m
+[36m@@ -603,6 +1076,14 @@[m [mclass _CppLintState(object):[m
+         raise ValueError('Every filter in --filters must start with + or -'[m
+                          ' (%s does not)' % filt)[m
+ [m
+[32m+[m[32m  def BackupFilters(self):[m
+[32m+[m[32m    """ Saves the current filter list to backup storage."""[m
+[32m+[m[32m    self._filters_backup = self.filters[:][m
+[32m+[m
+[32m+[m[32m  def RestoreFilters(self):[m
+[32m+[m[32m    """ Restores filters previously backed up."""[m
+[32m+[m[32m    self.filters = self._filters_backup[:][m
+[32m+[m
+   def ResetErrorCounts(self):[m
+     """Sets the module's error statistic back to zero."""[m
+     self.error_count = 0[m
+[36m@@ -620,10 +1101,69 @@[m [mclass _CppLintState(object):[m
+ [m
+   def PrintErrorCounts(self):[m
+     """Print a summary of errors by category, and the total."""[m
+[31m-    for category, count in self.errors_by_category.iteritems():[m
+[31m-      sys.stderr.write('Category \'%s\' errors found: %d\n' %[m
+[32m+[m[32m    for category, count in sorted(iteritems(self.errors_by_category)):[m
+[32m+[m[32m      self.PrintInfo('Category \'%s\' errors found: %d\n' %[m
+                        (category, count))[m
+[31m-    sys.stderr.write('Total errors found: %d\n' % self.error_count)[m
+[32m+[m[32m    if self.error_count > 0:[m
+[32m+[m[32m      self.PrintInfo('Total errors found: %d\n' % self.error_count)[m
+[32m+[m
+[32m+[m[32m  def PrintInfo(self, message):[m
+[32m+[m[32m    if not _quiet and self.output_format != 'junit':[m
+[32m+[m[32m      sys.stdout.write(message)[m
+[32m+[m
+[32m+[m[32m  def PrintError(self, message):[m
+[32m+[m[32m    if self.output_format == 'junit':[m
+[32m+[m[32m      self._junit_errors.append(message)[m
+[32m+[m[32m    else:[m
+[32m+[m[32m      sys.stderr.write(message)[m
+[32m+[m
+[32m+[m[32m  def AddJUnitFailure(self, filename, linenum, message, category, confidence):[m
+[32m+[m[32m    self._junit_failures.append((filename, linenum, message, category,[m
+[32m+[m[32m        confidence))[m
+[32m+[m
+[32m+[m[32m  def FormatJUnitXML(self):[m
+[32m+[m[32m    num_errors = len(self._junit_errors)[m
+[32m+[m[32m    num_failures = len(self._junit_failures)[m
+[32m+[m
+[32m+[m[32m    testsuite = xml.etree.ElementTree.Element('testsuite')[m
+[32m+[m[32m    testsuite.attrib['errors'] = str(num_errors)[m
+[32m+[m[32m    testsuite.attrib['failures'] = str(num_failures)[m
+[32m+[m[32m    testsuite.attrib['name'] = 'cpplint'[m
+[32m+[m
+[32m+[m[32m    if num_errors == 0 and num_failures == 0:[m
+[32m+[m[32m      testsuite.attrib['tests'] = str(1)[m
+[32m+[m[32m      xml.etree.ElementTree.SubElement(testsuite, 'testcase', name='passed')[m
+[32m+[m
+[32m+[m[32m    else:[m
+[32m+[m[32m      testsuite.attrib['tests'] = str(num_errors + num_failures)[m
+[32m+[m[32m      if num_errors > 0:[m
+[32m+[m[32m        testcase = xml.etree.ElementTree.SubElement(testsuite, 'testcase')[m
+[32m+[m[32m        testcase.attrib['name'] = 'errors'[m
+[32m+[m[32m        error = xml.etree.ElementTree.SubElement(testcase, 'error')[m
+[32m+[m[32m        error.text = '\n'.join(self._junit_errors)[m
+[32m+[m[32m      if num_failures > 0:[m
+[32m+[m[32m        # Group failures by file[m
+[32m+[m[32m        failed_file_order = [][m
+[32m+[m[32m        failures_by_file = {}[m
+[32m+[m[32m        for failure in self._junit_failures:[m
+[32m+[m[32m          failed_file = failure[0][m
+[32m+[m[32m          if failed_file not in failed_file_order:[m
+[32m+[m[32m            failed_file_order.append(failed_file)[m
+[32m+[m[32m            failures_by_file[failed_file] = [][m
+[32m+[m[32m          failures_by_file[failed_file].append(failure)[m
+[32m+[m[32m        # Create a testcase for each file[m
+[32m+[m[32m        for failed_file in failed_file_order:[m
+[32m+[m[32m          failures = failures_by_file[failed_file][m
+[32m+[m[32m          testcase = xml.etree.ElementTree.SubElement(testsuite, 'testcase')[m
+[32m+[m[32m          testcase.attrib['name'] = failed_file[m
+[32m+[m[32m          failure = xml.etree.ElementTree.SubElement(testcase, 'failure')[m
+[32m+[m[32m          template = '{0}: {1} [{2}] [{3}]'[m
+[32m+[m[32m          texts = [template.format(f[1], f[2], f[3], f[4]) for f in failures][m
+[32m+[m[32m          failure.text = '\n'.join(texts)[m
+[32m+[m
+[32m+[m[32m    xml_decl = '<?xml version="1.0" encoding="UTF-8" ?>\n'[m
+[32m+[m[32m    return xml_decl + xml.etree.ElementTree.tostring(testsuite, 'utf-8').decode('utf-8')[m
+[32m+[m
+ [m
+ _cpplint_state = _CppLintState()[m
+ [m
+[36m@@ -637,6 +1177,14 @@[m [mdef _SetOutputFormat(output_format):[m
+   """Sets the module's output format."""[m
+   _cpplint_state.SetOutputFormat(output_format)[m
+ [m
+[32m+[m[32mdef _Quiet():[m
+[32m+[m[32m  """Return's the module's quiet setting."""[m
+[32m+[m[32m  return _cpplint_state.quiet[m
+[32m+[m
+[32m+[m[32mdef _SetQuiet(quiet):[m
+[32m+[m[32m  """Set the module's quiet status, and return previous setting."""[m
+[32m+[m[32m  return _cpplint_state.SetQuiet(quiet)[m
+[32m+[m
+ [m
+ def _VerboseLevel():[m
+   """Returns the module's verbosity setting."""[m
+[36m@@ -670,6 +1218,25 @@[m [mdef _SetFilters(filters):[m
+   """[m
+   _cpplint_state.SetFilters(filters)[m
+ [m
+[32m+[m[32mdef _AddFilters(filters):[m
+[32m+[m[32m  """Adds more filter overrides.[m
+[32m+[m
+[32m+[m[32m  Unlike _SetFilters, this function does not reset the current list of filters[m
+[32m+[m[32m  available.[m
+[32m+[m
+[32m+[m[32m  Args:[m
+[32m+[m[32m    filters: A string of comma-separated filters (eg "whitespace/indent").[m
+[32m+[m[32m             Each filter should start with + or -; else we die.[m
+[32m+[m[32m  """[m
+[32m+[m[32m  _cpplint_state.AddFilters(filters)[m
+[32m+[m
+[32m+[m[32mdef _BackupFilters():[m
+[32m+[m[32m  """ Saves the current filter list to backup storage."""[m
+[32m+[m[32m  _cpplint_state.BackupFilters()[m
+[32m+[m
+[32m+[m[32mdef _RestoreFilters():[m
+[32m+[m[32m  """ Restores filters previously backed up."""[m
+[32m+[m[32m  _cpplint_state.RestoreFilters()[m
+ [m
+ class _FunctionState(object):[m
+   """Tracks current function name and the number of lines in its body."""[m
+[36m@@ -705,6 +1272,9 @@[m [mclass _FunctionState(object):[m
+       filename: The name of the current file.[m
+       linenum: The number of the line to check.[m
+     """[m
+[32m+[m[32m    if not self.in_a_function:[m
+[32m+[m[32m      return[m
+[32m+[m
+     if Match(r'T(EST|est)', self.current_function):[m
+       base_trigger = self._TEST_TRIGGER[m
+     else:[m
+[36m@@ -732,7 +1302,7 @@[m [mclass _IncludeError(Exception):[m
+   pass[m
+ [m
+ [m
+[31m-class FileInfo:[m
+[32m+[m[32mclass FileInfo(object):[m
+   """Provides utility functions for filenames.[m
+ [m
+   FileInfo provides easy access to the components of a file's path[m
+[36m@@ -747,12 +1317,12 @@[m [mclass FileInfo:[m
+     return os.path.abspath(self._filename).replace('\\', '/')[m
+ [m
+   def RepositoryName(self):[m
+[31m-    """FullName after removing the local path to the repository.[m
+[32m+[m[32m    r"""FullName after removing the local path to the repository.[m
+ [m
+     If we have a real absolute path name here we can try to do something smart:[m
+     detecting the root of the checkout and truncating /path/to/checkout from[m
+     the name so that we get header guards that don't include things like[m
+[31m-    "C:\Documents and Settings\..." or "/home/username/..." in them and thus[m
+[32m+[m[32m    "C:\\Documents and Settings\\..." or "/home/username/..." in them and thus[m
+     people on different computers who have checked the source out to different[m
+     locations won't see bogus errors.[m
+     """[m
+[36m@@ -761,6 +1331,20 @@[m [mclass FileInfo:[m
+     if os.path.exists(fullname):[m
+       project_dir = os.path.dirname(fullname)[m
+ [m
+[32m+[m[32m      # If the user specified a repository path, it exists, and the file is[m
+[32m+[m[32m      # contained in it, use the specified repository path[m
+[32m+[m[32m      if _repository:[m
+[32m+[m[32m        repo = FileInfo(_repository).FullName()[m
+[32m+[m[32m        root_dir = project_dir[m
+[32m+[m[32m        while os.path.exists(root_dir):[m
+[32m+[m[32m          # allow case insensitive compare on Windows[m
+[32m+[m[32m          if os.path.normcase(root_dir) == os.path.normcase(repo):[m
+[32m+[m[32m            return os.path.relpath(fullname, root_dir).replace('\\', '/')[m
+[32m+[m[32m          one_up_dir = os.path.dirname(root_dir)[m
+[32m+[m[32m          if one_up_dir == root_dir:[m
+[32m+[m[32m            break[m
+[32m+[m[32m          root_dir = one_up_dir[m
+[32m+[m
+       if os.path.exists(os.path.join(project_dir, ".svn")):[m
+         # If there's a .svn file in the current directory, we recursively look[m
+         # up the directory tree for the top of the SVN checkout[m
+[36m@@ -775,12 +1359,13 @@[m [mclass FileInfo:[m
+ [m
+       # Not SVN <= 1.6? Try to find a git, hg, or svn top level directory by[m
+       # searching up from the current path.[m
+[31m-      root_dir = os.path.dirname(fullname)[m
+[31m-      while (root_dir != os.path.dirname(root_dir) and[m
+[31m-             not os.path.exists(os.path.join(root_dir, ".git")) and[m
+[31m-             not os.path.exists(os.path.join(root_dir, ".hg")) and[m
+[31m-             not os.path.exists(os.path.join(root_dir, ".svn"))):[m
+[31m-        root_dir = os.path.dirname(root_dir)[m
+[32m+[m[32m      root_dir = current_dir = os.path.dirname(fullname)[m
+[32m+[m[32m      while current_dir != os.path.dirname(current_dir):[m
+[32m+[m[32m        if (os.path.exists(os.path.join(current_dir, ".git")) or[m
+[32m+[m[32m            os.path.exists(os.path.join(current_dir, ".hg")) or[m
+[32m+[m[32m            os.path.exists(os.path.join(current_dir, ".svn"))):[m
+[32m+[m[32m          root_dir = current_dir[m
+[32m+[m[32m        current_dir = os.path.dirname(current_dir)[m
+ [m
+       if (os.path.exists(os.path.join(root_dir, ".git")) or[m
+           os.path.exists(os.path.join(root_dir, ".hg")) or[m
+[36m@@ -810,7 +1395,7 @@[m [mclass FileInfo:[m
+     return self.Split()[1][m
+ [m
+   def Extension(self):[m
+[31m-    """File extension - text following the final period."""[m
+[32m+[m[32m    """File extension - text following the final period, includes that period."""[m
+     return self.Split()[2][m
+ [m
+   def NoExtension(self):[m
+[36m@@ -819,7 +1404,7 @@[m [mclass FileInfo:[m
+ [m
+   def IsSource(self):[m
+     """File has a source file extension."""[m
+[31m-    return self.Extension()[1:] in ('c', 'cc', 'cpp', 'cxx')[m
+[32m+[m[32m    return _IsSourceExtension(self.Extension()[1:])[m
+ [m
+ [m
+ def _ShouldPrintError(category, confidence, linenum):[m
+[36m@@ -830,6 +1415,7 @@[m [mdef _ShouldPrintError(category, confidence, linenum):[m
+   # the verbosity level isn't high enough, or the filters filter it out.[m
+   if IsErrorSuppressedByNolint(category, linenum):[m
+     return False[m
+[32m+[m
+   if confidence < _cpplint_state.verbose_level:[m
+     return False[m
+ [m
+[36m@@ -874,24 +1460,25 @@[m [mdef Error(filename, linenum, category, confidence, message):[m
+   if _ShouldPrintError(category, confidence, linenum):[m
+     _cpplint_state.IncrementErrorCount(category)[m
+     if _cpplint_state.output_format == 'vs7':[m
+[31m-      sys.stderr.write('%s(%s):  %s  [%s] [%d]\n' % ([m
+[31m-          filename, linenum, message, category, confidence))[m
+[32m+[m[32m      _cpplint_state.PrintError('%s(%s): error cpplint: [%s] %s [%d]\n' % ([m
+[32m+[m[32m          filename, linenum, category, message, confidence))[m
+     elif _cpplint_state.output_format == 'eclipse':[m
+       sys.stderr.write('%s:%s: warning: %s  [%s] [%d]\n' % ([m
+           filename, linenum, message, category, confidence))[m
+[32m+[m[32m    elif _cpplint_state.output_format == 'junit':[m
+[32m+[m[32m      _cpplint_state.AddJUnitFailure(filename, linenum, message, category,[m
+[32m+[m[32m          confidence)[m
+     else:[m
+[31m-      sys.stderr.write('%s:%s:  %s  [%s] [%d]\n' % ([m
+[31m-          filename, linenum, message, category, confidence))[m
+[32m+[m[32m      final_message = '%s:%s:  %s  [%s] [%d]\n' % ([m
+[32m+[m[32m          filename, linenum, message, category, confidence)[m
+[32m+[m[32m      sys.stderr.write(final_message)[m
+ [m
+[31m-[m
+[31m-# Matches standard C++ escape esequences per 2.13.2.3 of the C++ standard.[m
+[32m+[m[32m# Matches standard C++ escape sequences per 2.13.2.3 of the C++ standard.[m
+ _RE_PATTERN_CLEANSE_LINE_ESCAPES = re.compile([m
+     r'\\([abfnrtv?"\\\']|\d+|x[0-9a-fA-F]+)')[m
+[31m-# Matches strings.  Escape codes should already be removed by ESCAPES.[m
+[31m-_RE_PATTERN_CLEANSE_LINE_DOUBLE_QUOTES = re.compile(r'"[^"]*"')[m
+[31m-# Matches characters.  Escape codes should already be removed by ESCAPES.[m
+[31m-_RE_PATTERN_CLEANSE_LINE_SINGLE_QUOTES = re.compile(r"'.'")[m
+[31m-# Matches multi-line C++ comments.[m
+[32m+[m[32m# Match a single C style comment on the same line.[m
+[32m+[m[32m_RE_PATTERN_C_COMMENTS = r'/\*(?:[^*]|\*(?!/))*\*/'[m
+[32m+[m[32m# Matches multi-line C style comments.[m
+ # This RE is a little bit more complicated than one might expect, because we[m
+ # have to take care of space removals tools so we can handle comments inside[m
+ # statements better.[m
+[36m@@ -900,10 +1487,10 @@[m [m_RE_PATTERN_CLEANSE_LINE_SINGLE_QUOTES = re.compile(r"'.'")[m
+ # if this doesn't work we try on left side but only if there's a non-character[m
+ # on the right.[m
+ _RE_PATTERN_CLEANSE_LINE_C_COMMENTS = re.compile([m
+[31m-    r"""(\s*/\*.*\*/\s*$|[m
+[31m-            /\*.*\*/\s+|[m
+[31m-         \s+/\*.*\*/(?=\W)|[m
+[31m-            /\*.*\*/)""", re.VERBOSE)[m
+[32m+[m[32m    r'(\s*' + _RE_PATTERN_C_COMMENTS + r'\s*$|' +[m
+[32m+[m[32m    _RE_PATTERN_C_COMMENTS + r'\s+|' +[m
+[32m+[m[32m    r'\s+' + _RE_PATTERN_C_COMMENTS + r'(?=\W)|' +[m
+[32m+[m[32m    _RE_PATTERN_C_COMMENTS + r')')[m
+ [m
+ [m
+ def IsCppString(line):[m
+[36m@@ -923,6 +1510,82 @@[m [mdef IsCppString(line):[m
+   return ((line.count('"') - line.count(r'\"') - line.count("'\"'")) & 1) == 1[m
+ [m
+ [m
+[32m+[m[32mdef CleanseRawStrings(raw_lines):[m
+[32m+[m[32m  """Removes C++11 raw strings from lines.[m
+[32m+[m
+[32m+[m[32m    Before:[m
+[32m+[m[32m      static const char kData[] = R"([m
+[32m+[m[32m          multi-line string[m
+[32m+[m[32m          )";[m
+[32m+[m
+[32m+[m[32m    After:[m
+[32m+[m[32m      static const char kData[] = ""[m
+[32m+[m[32m          (replaced by blank line)[m
+[32m+[m[32m          "";[m
+[32m+[m
+[32m+[m[32m  Args:[m
+[32m+[m[32m    raw_lines: list of raw lines.[m
+[32m+[m
+[32m+[m[32m  Returns:[m
+[32m+[m[32m    list of lines with C++11 raw strings replaced by empty strings.[m
+[32m+[m[32m  """[m
+[32m+[m
+[32m+[m[32m  delimiter = None[m
+[32m+[m[32m  lines_without_raw_strings = [][m
+[32m+[m[32m  for line in raw_lines:[m
+[32m+[m[32m    if delimiter:[m
+[32m+[m[32m      # Inside a raw string, look for the end[m
+[32m+[m[32m      end = line.find(delimiter)[m
+[32m+[m[32m      if end >= 0:[m
+[32m+[m[32m        # Found the end of the string, match leading space for this[m
+[32m+[m[32m        # line and resume copying the original lines, and also insert[m
+[32m+[m[32m        # a "" on the last line.[m
+[32m+[m[32m        leading_space = Match(r'^(\s*)\S', line)[m
+[32m+[m[32m        line = leading_space.group(1) + '""' + line[end + len(delimiter):][m
+[32m+[m[32m        delimiter = None[m
+[32m+[m[32m      else:[m
+[32m+[m[32m        # Haven't found the end yet, append a blank line.[m
+[32m+[m[32m        line = '""'[m
+[32m+[m
+[32m+[m[32m    # Look for beginning of a raw string, and replace them with[m
+[32m+[m[32m    # empty strings.  This is done in a loop to handle multiple raw[m
+[32m+[m[32m    # strings on the same line.[m
+[32m+[m[32m    while delimiter is None:[m
+[32m+[m[32m      # Look for beginning of a raw string.[m
+[32m+[m[32m      # See 2.14.15 [lex.string] for syntax.[m
+[32m+[m[32m      #[m
+[32m+[m[32m      # Once we have matched a raw string, we check the prefix of the[m
+[32m+[m[32m      # line to make sure that the line is not part of a single line[m
+[32m+[m[32m      # comment.  It's done this way because we remove raw strings[m
+[32m+[m[32m      # before removing comments as opposed to removing comments[m
+[32m+[m[32m      # before removing raw strings.  This is because there are some[m
+[32m+[m[32m      # cpplint checks that requires the comments to be preserved, but[m
+[32m+[m[32m      # we don't want to check comments that are inside raw strings.[m
+[32m+[m[32m      matched = Match(r'^(.*?)\b(?:R|u8R|uR|UR|LR)"([^\s\\()]*)\((.*)$', line)[m
+[32m+[m[32m      if (matched and[m
+[32m+[m[32m          not Match(r'^([^\'"]|\'(\\.|[^\'])*\'|"(\\.|[^"])*")*//',[m
+[32m+[m[32m                    matched.group(1))):[m
+[32m+[m[32m        delimiter = ')' + matched.group(2) + '"'[m
+[32m+[m
+[32m+[m[32m        end = matched.group(3).find(delimiter)[m
+[32m+[m[32m        if end >= 0:[m
+[32m+[m[32m          # Raw string ended on same line[m
+[32m+[m[32m          line = (matched.group(1) + '""' +[m
+[32m+[m[32m                  matched.group(3)[end + len(delimiter):])[m
+[32m+[m[32m          delimiter = None[m
+[32m+[m[32m        else:[m
+[32m+[m[32m          # Start of a multi-line raw string[m
+[32m+[m[32m          line = matched.group(1) + '""'[m
+[32m+[m[32m      else:[m
+[32m+[m[32m        break[m
+[32m+[m
+[32m+[m[32m    lines_without_raw_strings.append(line)[m
+[32m+[m
+[32m+[m[32m  # TODO(unknown): if delimiter is not None here, we might want to[m
+[32m+[m[32m  # emit a warning for unterminated string.[m
+[32m+[m[32m  return lines_without_raw_strings[m
+[32m+[m
+[32m+[m
+ def FindNextMultiLineCommentStart(lines, lineix):[m
+   """Find the beginning marker for a multiline comment."""[m
+   while lineix < len(lines):[m
+[36m@@ -948,7 +1611,7 @@[m [mdef RemoveMultiLineCommentsFromRange(lines, begin, end):[m
+   # Having // dummy comments makes the lines non-empty, so we will not get[m
+   # unnecessary blank line warnings later in the code.[m
+   for i in range(begin, end):[m
+[31m-    lines[i] = '// dummy'[m
+[32m+[m[32m    lines[i] = '/**/'[m
+ [m
+ [m
+ def RemoveMultiLineComments(filename, lines, error):[m
+[36m@@ -984,12 +1647,14 @@[m [mdef CleanseComments(line):[m
+ [m
+ [m
+ class CleansedLines(object):[m
+[31m-  """Holds 3 copies of all lines with different preprocessing applied to them.[m
+[32m+[m[32m  """Holds 4 copies of all lines with different preprocessing applied to them.[m
+ [m
+[31m-  1) elided member contains lines without strings and comments,[m
+[31m-  2) lines member contains lines without comments, and[m
+[32m+[m[32m  1) elided member contains lines without strings and comments.[m
+[32m+[m[32m  2) lines member contains lines without comments.[m
+   3) raw_lines member contains all the lines without processing.[m
+[31m-  All these three members are of <type 'list'>, and of the same length.[m
+[32m+[m[32m  4) lines_without_raw_strings member is same as raw_lines, but with C++11 raw[m
+[32m+[m[32m     strings removed.[m
+[32m+[m[32m  All these members are of <type 'list'>, and of the same length.[m
+   """[m
+ [m
+   def __init__(self, lines):[m
+[36m@@ -997,9 +1662,11 @@[m [mclass CleansedLines(object):[m
+     self.lines = [][m
+     self.raw_lines = lines[m
+     self.num_lines = len(lines)[m
+[31m-    for linenum in range(len(lines)):[m
+[31m-      self.lines.append(CleanseComments(lines[linenum]))[m
+[31m-      elided = self._CollapseStrings(lines[linenum])[m
+[32m+[m[32m    self.lines_without_raw_strings = CleanseRawStrings(lines)[m
+[32m+[m[32m    for linenum in range(len(self.lines_without_raw_strings)):[m
+[32m+[m[32m      self.lines.append(CleanseComments([m
+[32m+[m[32m          self.lines_without_raw_strings[linenum]))[m
+[32m+[m[32m      elided = self._CollapseStrings(self.lines_without_raw_strings[linenum])[m
+       self.elided.append(CleanseComments(elided))[m
+ [m
+   def NumLines(self):[m
+[36m@@ -1018,45 +1685,151 @@[m [mclass CleansedLines(object):[m
+     Returns:[m
+       The line with collapsed strings.[m
+     """[m
+[31m-    if not _RE_PATTERN_INCLUDE.match(elided):[m
+[31m-      # Remove escaped characters first to make quote/single quote collapsing[m
+[31m-      # basic.  Things that look like escaped characters shouldn't occur[m
+[31m-      # outside of strings and chars.[m
+[31m-      elided = _RE_PATTERN_CLEANSE_LINE_ESCAPES.sub('', elided)[m
+[31m-      elided = _RE_PATTERN_CLEANSE_LINE_SINGLE_QUOTES.sub("''", elided)[m
+[31m-      elided = _RE_PATTERN_CLEANSE_LINE_DOUBLE_QUOTES.sub('""', elided)[m
+[31m-    return elided[m
+[32m+[m[32m    if _RE_PATTERN_INCLUDE.match(elided):[m
+[32m+[m[32m      return elided[m
+[32m+[m
+[32m+[m[32m    # Remove escaped characters first to make quote/single quote collapsing[m
+[32m+[m[32m    # basic.  Things that look like escaped characters shouldn't occur[m
+[32m+[m[32m    # outside of strings and chars.[m
+[32m+[m[32m    elided = _RE_PATTERN_CLEANSE_LINE_ESCAPES.sub('', elided)[m
+[32m+[m
+[32m+[m[32m    # Replace quoted strings and digit separators.  Both single quotes[m
+[32m+[m[32m    # and double quotes are processed in the same loop, otherwise[m
+[32m+[m[32m    # nested quotes wouldn't work.[m
+[32m+[m[32m    collapsed = ''[m
+[32m+[m[32m    while True:[m
+[32m+[m[32m      # Find the first quote character[m
+[32m+[m[32m      match = Match(r'^([^\'"]*)([\'"])(.*)$', elided)[m
+[32m+[m[32m      if not match:[m
+[32m+[m[32m        collapsed += elided[m
+[32m+[m[32m        break[m
+[32m+[m[32m      head, quote, tail = match.groups()[m
+[32m+[m
+[32m+[m[32m      if quote == '"':[m
+[32m+[m[32m        # Collapse double quoted strings[m
+[32m+[m[32m        second_quote = tail.find('"')[m
+[32m+[m[32m        if second_quote >= 0:[m
+[32m+[m[32m          collapsed += head + '""'[m
+[32m+[m[32m          elided = tail[second_quote + 1:][m
+[32m+[m[32m        else:[m
+[32m+[m[32m          # Unmatched double quote, don't bother processing the rest[m
+[32m+[m[32m          # of the line since this is probably a multiline string.[m
+[32m+[m[32m          collapsed += elided[m
+[32m+[m[32m          break[m
+[32m+[m[32m      else:[m
+[32m+[m[32m        # Found single quote, check nearby text to eliminate digit separators.[m
+[32m+[m[32m        #[m
+[32m+[m[32m        # There is no special handling for floating point here, because[m
+[32m+[m[32m        # the integer/fractional/exponent parts would all be parsed[m
+[32m+[m[32m        # correctly as long as there are digits on both sides of the[m
+[32m+[m[32m        # separator.  So we are fine as long as we don't see something[m
+[32m+[m[32m        # like "0.'3" (gcc 4.9.0 will not allow this literal).[m
+[32m+[m[32m        if Search(r'\b(?:0[bBxX]?|[1-9])[0-9a-fA-F]*$', head):[m
+[32m+[m[32m          match_literal = Match(r'^((?:\'?[0-9a-zA-Z_])*)(.*)$', "'" + tail)[m
+[32m+[m[32m          collapsed += head + match_literal.group(1).replace("'", '')[m
+[32m+[m[32m          elided = match_literal.group(2)[m
+[32m+[m[32m        else:[m
+[32m+[m[32m          second_quote = tail.find('\'')[m
+[32m+[m[32m          if second_quote >= 0:[m
+[32m+[m[32m            collapsed += head + "''"[m
+[32m+[m[32m            elided = tail[second_quote + 1:][m
+[32m+[m[32m          else:[m
+[32m+[m[32m            # Unmatched single quote[m
+[32m+[m[32m            collapsed += elided[m
+[32m+[m[32m            break[m
+[32m+[m
+[32m+[m[32m    return collapsed[m
+ [m
+ [m
+[31m-def FindEndOfExpressionInLine(line, startpos, depth, startchar, endchar):[m
+[31m-  """Find the position just after the matching endchar.[m
+[32m+[m[32mdef FindEndOfExpressionInLine(line, startpos, stack):[m
