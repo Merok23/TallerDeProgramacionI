@@ -15,7 +15,7 @@ size_t Wordscounter::get_words() {
 }
 
 void Wordscounter::process(std::istream& text_file) {
-    char state;
+    char state = 1;
     do {
         char c = text_file.get();
         state = next_state(state, c);
